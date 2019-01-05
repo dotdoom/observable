@@ -4,12 +4,11 @@
 
 library observable.src.observable_list;
 
-import 'dart:async';
 import 'dart:collection' show ListBase, UnmodifiableListView;
 
 import 'differs.dart';
-import 'records.dart';
 import 'observable.dart' show Observable;
+import 'records.dart';
 
 /// Represents an observable list of model values. If any items are added,
 /// removed, or replaced, then observers that are listening to [changes]
@@ -30,8 +29,6 @@ class ObservableList<E> extends ListBase<E> with Observable {
       new ObservableList<T>._spy(source._list.cast<T>());
 
   List<ListChangeRecord<E>> _listRecords;
-
-  StreamController<List<ListChangeRecord<E>>> _listChanges;
 
   /// The inner [List<E>] with the actual storage.
   final List<E> _list;
@@ -88,41 +85,6 @@ class ObservableList<E> extends ListBase<E> with Observable {
   // ignore: override_on_non_overriding_method
   ObservableList<T> retype<T>() => cast<T>();
 
-  /// The stream of summarized list changes, delivered asynchronously.
-  ///
-  /// Each list change record contains information about an individual mutation.
-  /// The records are projected so they can be applied sequentially. For
-  /// example, this set of mutations:
-  ///
-  ///     var model = new ObservableList.from(['a', 'b']);
-  ///     model.listChanges.listen((records) => records.forEach(print));
-  ///     model.removeAt(1);
-  ///     model.insertAll(0, ['c', 'd', 'e']);
-  ///     model.removeRange(1, 3);
-  ///     model.insert(1, 'f');
-  ///
-  /// The change records will be summarized so they can be "played back", using
-  /// the final list positions to figure out which item was added:
-  ///
-  ///     #<ListChangeRecord index: 0, removed: [], addedCount: 2>
-  ///     #<ListChangeRecord index: 3, removed: [b], addedCount: 0>
-  ///
-  /// [deliverChanges] can be called to force synchronous delivery.
-  Stream<List<ListChangeRecord<E>>> get listChanges {
-    if (_listChanges == null) {
-      // TODO(jmesserly): split observed/unobserved notions?
-      _listChanges = new StreamController.broadcast(
-        sync: true,
-        onCancel: () {
-          _listChanges = null;
-        },
-      );
-    }
-    return _listChanges.stream;
-  }
-
-  bool get hasListObservers => _listChanges != null && _listChanges.hasListener;
-
   @override
   int get length => _list.length;
 
@@ -133,12 +95,10 @@ class ObservableList<E> extends ListBase<E> with Observable {
 
     // Produce notifications if needed
     _notifyChangeLength(len, value);
-    if (hasListObservers) {
-      if (value < len) {
-        _notifyListChange(value, removed: _list.getRange(value, len).toList());
-      } else {
-        _notifyListChange(len, addedCount: value - len);
-      }
+    if (value < len) {
+      _notifyListChange(value, removed: _list.getRange(value, len).toList());
+    } else {
+      _notifyListChange(len, addedCount: value - len);
     }
 
     _list.length = value;
@@ -150,7 +110,7 @@ class ObservableList<E> extends ListBase<E> with Observable {
   @override
   void operator []=(int index, E value) {
     E oldValue = _list[index];
-    if (hasListObservers && oldValue != value) {
+    if (oldValue != value) {
       _notifyListChange(index, addedCount: 1, removed: [oldValue]);
     }
     _list[index] = value;
@@ -175,7 +135,7 @@ class ObservableList<E> extends ListBase<E> with Observable {
       iterable = iterable.toList();
     }
     int length = iterable.length;
-    if (hasListObservers && length > 0) {
+    if (length > 0) {
       _notifyListChange(index,
           addedCount: length, removed: _list.sublist(index, length));
     }
@@ -186,9 +146,7 @@ class ObservableList<E> extends ListBase<E> with Observable {
   void add(E value) {
     int len = _list.length;
     _notifyChangeLength(len, len + 1);
-    if (hasListObservers) {
-      _notifyListChange(len, addedCount: 1);
-    }
+    _notifyListChange(len, addedCount: 1);
 
     _list.add(value);
   }
@@ -201,7 +159,7 @@ class ObservableList<E> extends ListBase<E> with Observable {
     _notifyChangeLength(len, _list.length);
 
     int added = _list.length - len;
-    if (hasListObservers && added > 0) {
+    if (added > 0) {
       _notifyListChange(len, addedCount: added);
     }
   }
@@ -224,7 +182,7 @@ class ObservableList<E> extends ListBase<E> with Observable {
     int len = _list.length;
 
     _notifyChangeLength(len, len - rangeLength);
-    if (hasListObservers && rangeLength > 0) {
+    if (rangeLength > 0) {
       _notifyListChange(start, removed: _list.getRange(start, end).toList());
     }
 
@@ -252,7 +210,7 @@ class ObservableList<E> extends ListBase<E> with Observable {
 
     _notifyChangeLength(len, _list.length);
 
-    if (hasListObservers && insertionLength > 0) {
+    if (insertionLength > 0) {
       _notifyListChange(index, addedCount: insertionLength);
     }
   }
@@ -274,9 +232,7 @@ class ObservableList<E> extends ListBase<E> with Observable {
     _list.setRange(index + 1, length, this, index);
 
     _notifyChangeLength(_list.length - 1, _list.length);
-    if (hasListObservers) {
-      _notifyListChange(index, addedCount: 1);
-    }
+    _notifyListChange(index, addedCount: 1);
     _list[index] = element;
   }
 
@@ -301,12 +257,7 @@ class ObservableList<E> extends ListBase<E> with Observable {
     List<E> removed,
     int addedCount: 0,
   }) {
-    if (!hasListObservers) return;
-    if (_listRecords == null) {
-      _listRecords = [];
-      scheduleMicrotask(deliverListChanges);
-    }
-    _listRecords.add(new ListChangeRecord<E>(
+    notifyChange(new ListChangeRecord<E>(
       this,
       index,
       removed: removed,
@@ -318,23 +269,6 @@ class ObservableList<E> extends ListBase<E> with Observable {
     notifyPropertyChange(#length, oldValue, newValue);
     notifyPropertyChange(#isEmpty, oldValue == 0, newValue == 0);
     notifyPropertyChange(#isNotEmpty, oldValue != 0, newValue != 0);
-  }
-
-  void discardListChanges() {
-    // Leave _listRecords set so we don't schedule another delivery.
-    if (_listRecords != null) _listRecords = [];
-  }
-
-  bool deliverListChanges() {
-    if (_listRecords == null) return false;
-    final records = projectListSplices<E>(this, _listRecords);
-    _listRecords = null;
-
-    if (hasListObservers && records.isNotEmpty) {
-      _listChanges.add(new UnmodifiableListView<ListChangeRecord<E>>(records));
-      return true;
-    }
-    return false;
   }
 
   /// Calculates the changes to the list, if lacking individual splice mutation
